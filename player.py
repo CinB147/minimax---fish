@@ -125,11 +125,11 @@ class PlayerControllerMinimax(PlayerController):
         if time.time() - start_time > time_budget:
             return self.evaluate_state(node.state), []
         # Terminal or depth limit
-        if depth == 0 or len(node.observations) == node.depth:
+        if depth == 0 or len(node.observations) == node.depth: 
             return self.evaluate_state(node.state), []
         # Repetition detection
         state_key = self.compute_state_key(node)
-        if state_key in repetition_keys:
+        if state_key in repetition_keys: 
             return self.score_difference(node.state) * 0.5, []
         # Transposition table lookup
         tt_entry = self.transposition_table.get((state_key, depth))
@@ -150,7 +150,7 @@ class PlayerControllerMinimax(PlayerController):
         ordered = self.order_children(node, children, tt_entry[2] if tt_entry else None)
         best_move = None
         best_pv = []
-        if node.state.get_player() == 0:
+        if node.state.get_player() == 0: 
             # Maximizing player
             value = -math.inf
             for child in ordered:
@@ -267,9 +267,18 @@ class PlayerControllerMinimax(PlayerController):
         caught_fish_bonus = self.caught_fish_heuristic(state)
         fish_potential = self.fish_potential_heuristic(state)
         position_advantage = self.position_advantage_heuristic(state)
+        mobility = self.mobility_heuristic(state)
+        threat = self.threat_assessment_heuristic(state)
         #game_phase = self.game_phase_heuristic(state)
         
-        return score_diff + caught_fish_bonus + fish_potential + position_advantage #+ game_phase
+        return (
+            score_diff
+            + caught_fish_bonus
+            + fish_potential
+            + position_advantage
+            + mobility
+            + threat
+        ) # + game_phase
 
     def score_difference_heuristic(self, state):
         """Basic score difference weighted heavily"""
