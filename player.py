@@ -62,15 +62,7 @@ class PlayerControllerMinimax(PlayerController):
             # Execute next action
             self.sender({"action": best_move, "search_time": elapsed})
 
-    
 
-    def minimax_loop(self):
-
-        return
-
-    def alpha_beta_prune(self,):
-
-        return
 
     def search_best_next_move(self, initial_tree_node):
         """
@@ -170,7 +162,7 @@ class PlayerControllerMinimax(PlayerController):
                     best_move = child.move
                     best_pv = [child.move] + pv
                 alpha = max(alpha, value)
-                if alpha >= beta:
+                if alpha >= beta: # Beta cutoff
                     self.record_killer(node.depth, child.move)
                     break
             # Store in TT
@@ -194,7 +186,7 @@ class PlayerControllerMinimax(PlayerController):
                     best_move = child.move
                     best_pv = [child.move] + pv
                 beta = min(beta, value)
-                if alpha >= beta:
+                if alpha >= beta: # Alpha cutoff
                     self.record_killer(node.depth, child.move)
                     break
             entry_type = "EXACT"
@@ -259,36 +251,38 @@ class PlayerControllerMinimax(PlayerController):
         s0, s1 = state.get_player_scores()
         return s0 - s1
 
-    def _toroidal_dx(self, x0, x1):
-        return min((x1 - x0) % self.max_board_width, (x0 - x1) % self.max_board_width)
+    def fish_distant(self, pos1, pos2):
+        x1, y1 = pos1
+        x2, y2 = pos2
 
-    def manhattan_distance(self, p, q):
-        """
-        Manhattan distance adapted to toroidal x-axis.
-        p, q are (x, y)
-        """
-        dx = self._toroidal_dx(p[0], q[0])
-        dy = abs(p[1] - q[1])
+        dx = min((x2 - x1) % self.max_board_width, (x1 - x2) % self.max_board_width)
+        dy = abs(y2 - y1)
+        
         return dx + dy
 
-    def euclidean_distance(self, p, q):
-        """
-        Euclidean distance adapted to toroidal x-axis.
-        p, q are (x, y)
-        """
-        dx = self._toroidal_dx(p[0], q[0])
-        dy = abs(p[1] - q[1])
-        return math.hypot(dx, dy)
-
     def evaluate_state(self, state):
-        # Heuristic: current score diff + potential of remaining fish considering distances
+        # Main heuristic: combines multiple evaluation functions
         self.node_evaluations += 1
-        diff = self.score_difference(state) * 1000
+        score_diff = self.score_difference_heuristic(state)
+        caught_fish_bonus = self.caught_fish_heuristic(state)
+        fish_potential = self.fish_potential_heuristic(state)
+        position_advantage = self.position_advantage_heuristic(state)
+        #game_phase = self.game_phase_heuristic(state)
+        
+        return score_diff + caught_fish_bonus + fish_potential + position_advantage #+ game_phase
+
+    def score_difference_heuristic(self, state):
+        """Basic score difference weighted heavily"""
+        return self.score_difference(state) * 1000
+
+    def caught_fish_heuristic(self, state):
+        """Reward for having fish on rod, especially close to deepest"""
+        diff = 0
         hooks = state.get_hook_positions()
         fish_positions = state.get_fish_positions()
-        fish_scores = state.get_fish_scores()
         caught = state.get_caught()
-        # Reward having a fish on rod
+
+
         if caught[0] is not None and caught[0] in fish_positions:
             fish_y = fish_positions[caught[0]][1]
             depth_to_surface = (self.max_board_height - 1) - fish_y
@@ -297,21 +291,100 @@ class PlayerControllerMinimax(PlayerController):
             fish_y = fish_positions[caught[1]][1]
             depth_to_surface = (self.max_board_height - 1) - fish_y
             diff -= 500 + 50 * max(0, 9 - depth_to_surface)
-        # Potential of free fish
-        for fish_num, (fx, fy) in fish_positions.items():
+        return diff
+
+    def fish_potential_heuristic(self, state):
+        """Distance-weighted potential of remaining fish"""
+        diff = 0
+        hooks = state.get_hook_positions()
+        fish_positions = state.get_fish_positions()
+        fish_scores = state.get_fish_scores()
+        
+        for fish_num, fish_pos in fish_positions.items():
             value = fish_scores[fish_num]
             if value == 0:
                 continue
-            mpos = hooks[0]
-            opos = hooks[1]
-            #Manhattan distance for number-of-moves estimate
-            dist_m = self.manhattan_distance(mpos, (fx, fy))
-            dist_o = self.manhattan_distance(opos, (fx, fy))
+
+            dist_m = self.fish_distant(hooks[0], fish_pos)
+            dist_o = self.fish_distant(hooks[1], fish_pos)
+            
+            # Avoid division by zero
             if dist_m == 0:
                 dist_m = 0.5
             if dist_o == 0:
                 dist_o = 0.5
-            potential = 100 * value * (1.0 / (1.0 + dist_m))
-            opp_potential = 100 * value * (1.0 / (1.0 + dist_o))
+                
+            potential = 100 * value / (1.0 + dist_m)
+            opp_potential = 100 * value / (1.0 + dist_o)
             diff += potential - 0.7 * opp_potential
+        return diff
+
+    def position_advantage_heuristic(self, state):
+        """Reward central positioning and avoid edges"""
+        diff = 0
+        hooks = state.get_hook_positions()
+        my_hook = hooks[0]
+        opp_hook = hooks[1]
+        
+        # Prefer central positions (avoid edges)
+        center_x = self.max_board_width // 2
+        my_center_dist = abs(my_hook[0] - center_x)
+        opp_center_dist = abs(opp_hook[0] - center_x)
+        diff += (opp_center_dist - my_center_dist) * 10
+        
+        # Prefer being at surface when not fishing
+        if state.get_caught()[0] is None:
+            diff += (self.max_board_height - 1 - my_hook[1]) * 5
+        return diff
+
+    # def game_phase_heuristic(self, state):
+    #     """Adjust strategy based on game phase (early/mid/late)"""
+    #     fish_positions = state.get_fish_positions()
+    #     total_fish = len(fish_positions)
+    #
+    #     # Early game: focus on high-value fish
+    #     if total_fish > 15:
+    #         return 0
+    #     # Mid game: balanced approach
+    #     elif total_fish > 8:
+    #         return 0
+    #     # Late game: prioritize any remaining fish
+    #     else:
+    #         return 50  # Small bonus for late game aggression
+
+    def mobility_heuristic(self, state):
+        """Reward positions with more movement options"""
+        hooks = state.get_hook_positions()
+        my_hook = hooks[0]
+        fish_positions = state.get_fish_positions()
+        
+        # Count fish within 3 moves
+        nearby_fish = 0
+        for fish_pos in fish_positions.values():
+            if self.fish_distant(my_hook, fish_pos) <= 3:
+                nearby_fish += 1
+        return nearby_fish * 20
+
+    def threat_assessment_heuristic(self, state):
+        """Assess opponent threats and opportunities"""
+        hooks = state.get_hook_positions()
+        fish_positions = state.get_fish_positions()
+        fish_scores = state.get_fish_scores()
+        my_hook = hooks[0]
+        opp_hook = hooks[1]
+        
+        diff = 0
+        for fish_num, fish_pos in fish_positions.items():
+            value = fish_scores[fish_num]
+
+
+            my_dist = self.fish_distant(my_hook, fish_pos)
+            opp_dist = self.fish_distant(opp_hook, fish_pos)
+            
+            # If opponent is closer to high-value fish, it's a threat
+            if opp_dist < my_dist and value > 5:
+                diff -= value * 10
+            # If we're closer, it's an opportunity
+            elif my_dist < opp_dist and value > 0:
+                diff += value * 5
         return diff
